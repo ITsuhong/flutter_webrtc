@@ -101,7 +101,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   initISocket() async {
-    socket = IO.io('http://172.21.192.1:3000', <String, dynamic>{
+    socket = IO.io('http://192.168.2.4:3000', <String, dynamic>{
       'autoConnect': true,
       'transports': ['websocket'],
     });
@@ -129,8 +129,10 @@ class _MyHomePageState extends State<MyHomePage> {
             await createPeerConnection(configuration, pcConstraints);
         remoteConnection.onIceCandidate = (candidate) {
           localConnection.addCandidate(candidate);
+          socket!.emit('sendCandidate',
+              {'candidate': iceCandidateToJson(candidate), 'roomId': roomId});
         };
-        Map data = {'roomId': roomId, "offer": offer.sdp};
+        Map data = {'roomId': roomId, "offer": offer.toMap()};
         socket!.emit('sendOffer', data);
       }
       // setState(() {
@@ -138,15 +140,48 @@ class _MyHomePageState extends State<MyHomePage> {
       //   called = true;
       // });
     });
-    socket!.on('sendAnswer', (data) {
+
+// 从 Map 重建 RTCSessionDescription 对象
+    RTCSessionDescription jsonToSessionDescription(Map<String, dynamic> json) {
+      return RTCSessionDescription(
+        json['sdp'],
+        json['type'],
+      );
+    }
+
+    socket!.on('sendAnswer', (data) async {
+      await localConnection
+          .setRemoteDescription(jsonToSessionDescription(data));
       print("收到回复");
       print(data);
+    });
+    RTCIceCandidate jsonToIceCandidate(Map<String, dynamic> json) {
+      return RTCIceCandidate(
+        json['candidate'],
+        json['sdpMid'],
+        json['sdpMLineIndex'],
+      );
+    }
+
+    socket!.on('sendCandidate', (data) {
+      print("收到候选人");
+      localConnection.addCandidate(jsonToIceCandidate(data));
+      remoteConnection.addCandidate(jsonToIceCandidate(data));
     });
   }
 
   void initRenderers() async {
     await _localVideoRenderer.initialize();
     await _remoteVideoRenderer.initialize();
+  }
+
+// 将 RTCIceCandidate 转换为 Map
+  Map<String, dynamic> iceCandidateToJson(RTCIceCandidate candidate) {
+    return {
+      'candidate': candidate.candidate,
+      'sdpMid': candidate.sdpMid,
+      'sdpMLineIndex': candidate.sdpMLineIndex,
+    };
   }
 
   _getlocalUserMedia() async {
@@ -156,7 +191,10 @@ class _MyHomePageState extends State<MyHomePage> {
     localConnection = await createPeerConnection(configuration, pcConstraints);
     remoteConnection = await createPeerConnection(configuration, pcConstraints);
     localConnection.onIceCandidate = (candidate) {
+      print("数据生成${candidate.candidate}");
       remoteConnection.addCandidate(candidate);
+      socket!.emit('sendCandidate',
+          {'candidate': iceCandidateToJson(candidate), 'roomId': roomId});
     };
     localConnection.onConnectionState = (state) {
       print(state);

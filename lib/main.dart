@@ -46,7 +46,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   final _remoteVideoRenderer = RTCVideoRenderer();
   late RTCPeerConnection remoteConnection;
-  late MediaStream remotestream;
+  dynamic remotestream = null;
   bool caller = false;
   bool called = false;
 
@@ -75,13 +75,13 @@ class _MyHomePageState extends State<MyHomePage> {
   };
   Map<String, dynamic> configuration = {
     "iceServers": [
-      {"url": "stun:stun.l.google.com:19302"},
+      // {"url": "stun:stun.l.google.com:19302"},
     ]
   };
   final Map<String, dynamic> sdpConstraints = {
     "mandatory": {
       "OfferToReceiveAudio": true,
-      "OfferToReceiveVideo": false,
+      "OfferToReceiveVideo": true,
     },
     "optional": [],
   };
@@ -101,7 +101,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   initISocket() async {
-    socket = IO.io('http://192.168.2.4:3000', <String, dynamic>{
+    socket = IO.io('http://172.20.200.149:3000', <String, dynamic>{
       'autoConnect': true,
       'transports': ['websocket'],
     });
@@ -119,15 +119,69 @@ class _MyHomePageState extends State<MyHomePage> {
     socket!.emit('joinRoom', roomId);
     socket!.on('acceptCall', (data) async {
       if (caller) {
+        try {
+          localConnection =
+              await createPeerConnection(configuration, pcConstraints);
+          // remoteConnection =
+          //     await createPeerConnection(configuration, pcConstraints);
+        } catch (e) {}
+
+        localConnection.onIceCandidate = (candidate) {
+          localConnection.addCandidate(candidate);
+          print(candidate.candidate);
+        };
+        // remoteConnection.onAddTrack = (stream, track) {
+        //   print("收到远程流${stream.id}");
+        //   remotestream = stream;
+        //   _remoteVideoRenderer.srcObject = stream;
+        //   setState(() {});
+        // };
+        localConnection.onAddTrack = (stream, track) {
+          print("收到远程流${stream.id}");
+          remotestream = stream;
+          _remoteVideoRenderer.srcObject = stream;
+          setState(() {});
+        };
+        // remoteConnection.onConnectionState = (state) {
+        //   print(state);
+        // };
+        localConnection.onIceCandidate = (candidate) {
+          print("数据生成${candidate.candidate}");
+          // remoteConnection.addCandidate(candidate);
+          socket!.emit('sendCandidate',
+              {'candidate': iceCandidateToJson(candidate), 'roomId': roomId});
+        };
+        localConnection.onConnectionState = (state) {
+          print(state);
+        };
+        localConnection.addTrack(localstream.getVideoTracks()[0], localstream);
+        // for (MediaStreamTrack track in localstream.getTracks()) {
+        //   localConnection.addTrack(track, localstream);
+        // }
+        // 确保对视频轨道调用 setTorch
+        // final videoTracks = localstream.getVideoTracks();
+        // print("这是哈哈${videoTracks[0]}");
+        // videoTracks[0].setTorch(true);
+        // if (videoTracks.isNotEmpty && videoTracks[0] != null) {
+        //   try {
+        //     videoTracks[0].setTorch(true);
+        //   } catch (e) {
+        //     print("Error setting torch: $e");
+        //   }
+        // } else {
+        //   print("No video tracks available or track is null");
+        // }
+        setState(() {});
         //生成offer
         RTCSessionDescription offer =
             await localConnection.createOffer(sdpConstraints);
         localConnection.setLocalDescription(offer);
-        remoteConnection.setRemoteDescription(offer);
 
-        remoteConnection =
-            await createPeerConnection(configuration, pcConstraints);
-        remoteConnection.onIceCandidate = (candidate) {
+        // remoteConnection.setRemoteDescription(offer);
+        //
+        // remoteConnection =
+        //     await createPeerConnection(configuration, pcConstraints);
+        localConnection.onIceCandidate = (candidate) {
           localConnection.addCandidate(candidate);
           socket!.emit('sendCandidate',
               {'candidate': iceCandidateToJson(candidate), 'roomId': roomId});
@@ -153,7 +207,6 @@ class _MyHomePageState extends State<MyHomePage> {
       await localConnection
           .setRemoteDescription(jsonToSessionDescription(data));
       print("收到回复");
-      print(data);
     });
     RTCIceCandidate jsonToIceCandidate(Map<String, dynamic> json) {
       return RTCIceCandidate(
@@ -166,13 +219,17 @@ class _MyHomePageState extends State<MyHomePage> {
     socket!.on('sendCandidate', (data) {
       print("收到候选人");
       localConnection.addCandidate(jsonToIceCandidate(data));
-      remoteConnection.addCandidate(jsonToIceCandidate(data));
+      // remoteConnection.addCandidate(jsonToIceCandidate(data));
     });
   }
 
   void initRenderers() async {
-    await _localVideoRenderer.initialize();
-    await _remoteVideoRenderer.initialize();
+    try {
+      await _localVideoRenderer.initialize();
+      await _remoteVideoRenderer.initialize();
+    } catch (e) {
+      print(e);
+    }
   }
 
 // 将 RTCIceCandidate 转换为 Map
@@ -184,32 +241,21 @@ class _MyHomePageState extends State<MyHomePage> {
     };
   }
 
+  close() {
+    localstream.dispose();
+    localstream = null;
+    _localVideoRenderer.srcObject = null;
+    localConnection.close();
+    _remoteVideoRenderer.srcObject = null;
+    remotestream = null;
+    setState(() {});
+  }
+
   _getlocalUserMedia() async {
     localstream =
         await navigator.mediaDevices.getUserMedia(localmediaConstraints);
     _localVideoRenderer.srcObject = localstream;
-    localConnection = await createPeerConnection(configuration, pcConstraints);
-    remoteConnection = await createPeerConnection(configuration, pcConstraints);
-    localConnection.onIceCandidate = (candidate) {
-      print("数据生成${candidate.candidate}");
-      remoteConnection.addCandidate(candidate);
-      socket!.emit('sendCandidate',
-          {'candidate': iceCandidateToJson(candidate), 'roomId': roomId});
-    };
-    localConnection.onConnectionState = (state) {
-      print(state);
-    };
-
-    for (MediaStreamTrack track in localstream.getTracks()) {
-      localConnection.addTrack(track, localstream);
-    }
-    // 确保对视频轨道调用 setTorch
-    final videoTracks = localstream.getVideoTracks();
-    if (videoTracks.isNotEmpty) {
-      videoTracks[0].setTorch(true);
-    } else {
-      print("No video tracks available1");
-    }
+    print("本地的流${localstream.id}");
     setState(() {});
   }
 
@@ -218,7 +264,11 @@ class _MyHomePageState extends State<MyHomePage> {
   CallUser() {
     caller = true;
     if (localstream == null) {
-      _getlocalUserMedia();
+      try {
+        _getlocalUserMedia();
+      } catch (e) {
+        print(e);
+      }
     }
     socket!.emit("call", roomId);
   }
@@ -254,9 +304,29 @@ class _MyHomePageState extends State<MyHomePage> {
                     CallUser();
                   },
                   child: Text("拨打视频")),
-              ElevatedButton(onPressed: () {}, child: Text("接听"))
+              ElevatedButton(onPressed: () {}, child: Text("接听")),
+              ElevatedButton(
+                  onPressed: () {
+                    close();
+                  },
+                  child: Text("断开"))
             ],
-          )
+          ),
+          Container(
+            key: const Key('remove'),
+            margin: const EdgeInsets.fromLTRB(5.0, 5.0, 5.0, 5.0),
+            decoration: const BoxDecoration(color: Colors.black),
+            child: Container(
+              height: 300,
+              width: 200,
+              child: remotestream != null
+                  ? RTCVideoView(_remoteVideoRenderer)
+                  : Text(
+                      "等待连接",
+                      style: TextStyle(color: Colors.white),
+                    ),
+            ),
+          ),
         ],
       ),
     );
